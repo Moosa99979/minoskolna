@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>MINOS SIGINT // UFO SCANNER</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#000;overflow:hidden;font-family:'Courier New',monospace;color:#00ff6e;-webkit-user-select:none;user-select:none;touch-action:none}
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+#camWrap{position:relative;flex:1;overflow:hidden;background:#000}
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#canvas{position:absolute;inset:0;width:100%;height:100%}
+#controls{background:rgba(0,8,3,0.97);padding:6px 6px 20px;flex-shrink:0;overflow-y:auto;max-height:52vh}
+.row{display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap}
+.btn{flex:1;min-width:60px;max-width:120px;height:34px;background:rgba(0,255,110,0.07);border:1px solid #00a846;border-radius:2px;color:#00ff6e;font-family:'Courier New',monospace;font-size:7.5px;letter-spacing:0.08em;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 2px;white-space:pre-line;-webkit-tap-highlight-color:transparent}
+.btn.on,.btn:active{background:rgba(0,255,110,0.18);border-color:#00ff6e;box-shadow:0 0 8px rgba(0,255,110,0.25)}
+.btn.red{border-color:#ff3232;color:#ff3232}.btn.red:active,.btn.red.on{background:rgba(255,50,50,0.16)}
+.btn.amb{border-color:#ffb428;color:#ffb428}.btn.amb:active{background:rgba(255,180,40,0.16)}
+.btn.cyan{border-color:#28dcff;color:#28dcff}.btn.cyan.on{background:rgba(40,220,255,0.14)}
+.sliders{margin-top:2px}
+.sblock{margin-bottom:3px}
+.slbl{font-size:7px;color:#00a846;letter-spacing:0.07em;margin-bottom:1px}
+input[type=range]{width:100%;-webkit-appearance:none;height:2px;background:#00a846;border-radius:1px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#00ff6e;box-shadow:0 0 5px #00ff6e}
+#startOverlay{position:fixed;inset:0;background:rgba(0,4,1,0.97);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:100}
+#bootTitle{font-size:22px;font-weight:900;letter-spacing:0.22em;color:#00ff6e;text-shadow:0 0 24px #00ff6e;text-align:center}
+#bootSub{font-size:9px;letter-spacing:0.16em;color:#00a846;text-align:center}
+#bootLog{font-size:8px;color:#00a846;line-height:2;text-align:left;width:260px;letter-spacing:0.06em}
+#startBtn{background:transparent;border:1px solid #00ff6e;color:#00ff6e;font-family:'Courier New',monospace;font-size:10px;font-weight:700;letter-spacing:0.2em;padding:12px 30px;cursor:pointer;box-shadow:0 0 16px rgba(0,255,110,0.2);border-radius:2px}
+#startBtn:active{background:rgba(0,255,110,0.1)}
+#errMsg{color:#ff3232;font-size:8px;text-align:center;display:none;max-width:260px;line-height:1.6}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.15}}
+.blink{animation:blink 1s infinite}
+</style>
+</head>
+<body>
+
+<div id="startOverlay">
+  <div id="bootTitle">MINOS SIGINT</div>
+  <div id="bootSub">UFO SCANNER // ADVANCED TARGET LOCK</div>
+  <div id="bootLog">
+    <div id="b1">&gt; INITIALIZING SENSOR ARRAY...</div>
+    <div id="b2" style="opacity:0">&gt; LOADING MOTION KERNEL...</div>
+    <div id="b3" style="opacity:0">&gt; CALIBRATING KALMAN FILTER...</div>
+    <div id="b4" style="opacity:0">&gt; RADAR SUBSYSTEM ONLINE...</div>
+    <div id="b5" style="opacity:0">&gt; AWAITING CAMERA AUTHORIZATION</div>
+  </div>
+  <button id="startBtn">AUTHORIZE CAMERA</button>
+  <div id="errMsg"></div>
+</div>
+
+<div id="app">
+  <div id="camWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+  <div id="controls">
+    <!-- Row 1: main action buttons -->
+    <div class="row">
+      <button class="btn cyan" id="bCapture">CAPTURE\nRETICLE</button>
+      <button class="btn red" id="bUnlock">UNLOCK\nTARGET</button>
+      <button class="btn on" id="bUfo">UFO\nSCAN</button>
+      <button class="btn on" id="bScanline">SCAN\nLINES</button>
+      <button class="btn on" id="bRadar">RADAR\nON</button>
+      <button class="btn" id="bMirror">MIRROR\nOFF</button>
+      <button class="btn" id="bMode">MODE\nNORMAL</button>
+      <button class="btn" id="bSliders">SLIDERS\nHIDE</button>
+    </div>
+    <!-- Row 2: secondary buttons -->
+    <div class="row">
+      <button class="btn on" id="bFlow">FLOW\nON</button>
+      <button class="btn on" id="bInspect">INSPECT\nON</button>
+      <button class="btn" id="bFlip">FLIP\nCAM</button>
+      <button class="btn amb" id="bColor">COLOR\nGREEN</button>
+    </div>
+    <!-- Sliders -->
+    <div class="sliders" id="sliderPanel">
+      <div class="sblock"><div class="slbl" id="lZoom">CAMERA ZOOM: 1.0x</div><input type="range" id="sZoom" min="10" max="60" value="10"></div>
+      <div class="sblock"><div class="slbl" id="lThresh">SENS / THRESHOLD: 6</div><input type="range" id="sThresh" min="1" max="60" value="6"></div>
+      <div class="sblock"><div class="slbl" id="lArea">MIN MOTION AREA: 1px</div><input type="range" id="sArea" min="1" max="80" value="1"></div>
+      <div class="sblock"><div class="slbl" id="lPts">MAX POINTS: 220</div><input type="range" id="sPts" min="25" max="500" value="220"></div>
+      <div class="sblock"><div class="slbl" id="lCapR">RETICLE CAPTURE RADIUS: 92px</div><input type="range" id="sCapR" min="20" max="180" value="92"></div>
+      <div class="sblock"><div class="slbl" id="lLockR">LOCK SEARCH RADIUS: 72px</div><input type="range" id="sLockR" min="15" max="220" value="72"></div>
+      <div class="sblock"><div class="slbl" id="lFlowR">OPTICAL FLOW RADIUS: 28px</div><input type="range" id="sFlowR" min="12" max="80" value="28"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── BOOT ─────────────────────────────────────────────────────
+['b2','b3','b4','b5'].forEach((id,i)=>setTimeout(()=>document.getElementById(id).style.opacity='1',350+i*340));
+document.getElementById('startBtn').addEventListener('click', startCam);
+
+// ─── STATE ────────────────────────────────────────────────────
+const S = {
+  stream: null, running: false, facing: 'environment', mirror: false,
+  zoom: 1.0, threshold: 6, minArea: 1, maxPts: 220, capRadius: 92, lockRadius: 72, flowRadius: 28,
+  mode: 'NORMAL', // NORMAL EDGE THERMAL DITHER
+  ufoOn: true, scanlineOn: true, radarOn: true, flowOn: true, inspectOn: true,
+  showSliders: true,
+  prevGray: null, motionHist: [], lastPts: [], fps: 0, fpsClock: 0, fpsF: 0,
+  locked: false, lockT: null, lockSeen: 0, lostAfter: 2.2,
+  capRequested: false, capArmed: false,
+  lockStatus: 'RETICLE READY', trackConf: 0,
+  kx: 0, ky: 0, kvx: 0, kvy: 0, kReady: false,
+  velX: 0, velY: 0,
+  snapLabel: 'UNSCANNED', snapConf: 0, snapDone: false,
+  radarAng: 0, radarBlips: [],
+  // flow simulation state
+  flowPts: null, flowAge: 0,
+  colorIdx: 0,
+  motionDecay: 1.2,
+};
+const COLORS = [
+  {name:'GREEN',r:0,g:255,b:110},
+  {name:'CYAN',r:40,g:220,b:255},
+  {name:'AMBER',r:255,g:180,b:40},
+  {name:'RED',r:255,g:50,b:50},
+  {name:'WHITE',r:230,g:255,b:235},
+];
+function col() { return COLORS[S.colorIdx]; }
+function rgba(c,a) { return `rgba(${c.r},${c.g},${c.b},${a})`; }
+function rgbS(c,f=1) { return `rgb(${Math.round(c.r*f)},${Math.round(c.g*f)},${Math.round(c.b*f)})`; }
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// ─── RESIZE ──────────────────────────────────────────────────
+function resize() {
+  const wrap = document.getElementById('camWrap');
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+}
+resize(); window.addEventListener('resize', resize);
+
+// ─── CAMERA ──────────────────────────────────────────────────
+async function startCam() {
+  try {
+    if (S.stream) S.stream.getTracks().forEach(t=>t.stop());
+    S.stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:S.facing,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}},audio:false
+    });
+    video.srcObject = S.stream;
+    await video.play();
+    document.getElementById('startOverlay').style.display='none';
+    S.running = true; S.prevGray = null;
+    requestAnimationFrame(loop);
+  } catch(e) {
+    const em = document.getElementById('errMsg');
+    em.style.display='block';
+    em.textContent = 'Camera error: '+e.message+'\nOpen this file via a hosted https:// URL for iOS camera access.';
+  }
+}
+
+// ─── CONTROLS ────────────────────────────────────────────────
+function tog(id,key,onTxt,offTxt,cb) {
+  const b = document.getElementById(id);
+  b.addEventListener('click',()=>{
+    S[key]=!S[key];
+    b.textContent=(S[key]?onTxt:offTxt).replace('\\n','\n');
+    b.classList.toggle('on',S[key]);
+    if(cb) cb();
+  });
+}
+tog('bUfo','ufoOn','UFO\nSCAN','UFO\nOFF',()=>{if(!S.ufoOn){S.prevGray=null;S.motionHist=[];unlockTarget();}});
+tog('bScanline','scanlineOn','SCAN\nLINES','SCAN\nOFF');
+tog('bRadar','radarOn','RADAR\nON','RADAR\nOFF',()=>{if(!S.radarOn)S.radarBlips=[];});
+tog('bFlow','flowOn','FLOW\nON','FLOW\nOFF',()=>{S.flowPts=null;});
+tog('bInspect','inspectOn','INSPECT\nON','INSPECT\nOFF');
+tog('bMirror','mirror','MIRROR\nON','MIRROR\nOFF',()=>{S.prevGray=null;unlockTarget();});
+
+document.getElementById('bCapture').addEventListener('click',()=>{
+  S.capRequested=true; S.capArmed=true;
+  S.lockStatus='CAPTURE ARMED: CENTER RETICLE';
+  document.getElementById('bCapture').textContent='CAPTURE\nARMED';
+});
+document.getElementById('bUnlock').addEventListener('click', unlockTarget);
+
+document.getElementById('bFlip').addEventListener('click',()=>{
+  S.facing = S.facing==='environment'?'user':'environment';
+  S.prevGray=null; S.motionHist=[]; unlockTarget();
+  if(S.running) startCam();
+});
+
+const MODES=['NORMAL','EDGE','THERMAL','DITHER'];
+document.getElementById('bMode').addEventListener('click',function(){
+  S.mode=MODES[(MODES.indexOf(S.mode)+1)%MODES.length];
+  this.textContent='MODE\n'+S.mode;
+});
+
+document.getElementById('bColor').addEventListener('click',function(){
+  S.colorIdx=(S.colorIdx+1)%COLORS.length;
+  this.textContent='COLOR\n'+COLORS[S.colorIdx].name;
+});
+
+document.getElementById('bSliders').addEventListener('click',function(){
+  S.showSliders=!S.showSliders;
+  document.getElementById('sliderPanel').style.display=S.showSliders?'block':'none';
+  this.textContent=S.showSliders?'SLIDERS\nHIDE':'SLIDERS\nSHOW';
+  this.classList.toggle('on',S.showSliders);
+});
+
+// sliders
+function sl(id,lbl,key,fmt,cb){
+  document.getElementById(id).addEventListener('input',function(){
+    S[key]=+this.value;
+    document.getElementById(lbl).textContent=fmt(S[key]);
+    if(cb)cb();
+  });
+}
+sl('sZoom','lZoom','zoom',v=>`CAMERA ZOOM: ${(v/10).toFixed(1)}x`,()=>{S.zoom=S.zoom/10;S.prevGray=null;unlockTarget()});
+document.getElementById('sZoom').addEventListener('input',function(){S.zoom=this.value/10;document.getElementById('lZoom').textContent=`CAMERA ZOOM: ${S.zoom.toFixed(1)}x`;S.prevGray=null;unlockTarget();});
+sl('sThresh','lThresh','threshold',v=>`SENS / THRESHOLD: ${v}`);
+sl('sArea','lArea','minArea',v=>`MIN MOTION AREA: ${v}px`);
+sl('sPts','lPts','maxPts',v=>`MAX POINTS: ${v}`);
+sl('sCapR','lCapR','capRadius',v=>`RETICLE CAPTURE RADIUS: ${v}px`);
+sl('sLockR','lLockR','lockRadius',v=>`LOCK SEARCH RADIUS: ${v}px`);
+sl('sFlowR','lFlowR','flowRadius',v=>`OPTICAL FLOW RADIUS: ${v}px`);
+
+function unlockTarget(){
+  S.locked=false; S.lockT=null; S.capRequested=false; S.capArmed=false;
+  S.lockStatus='RETICLE READY'; S.trackConf=0;
+  S.kReady=false; S.flowPts=null;
+  S.snapLabel='UNSCANNED'; S.snapConf=0; S.snapDone=false;
+  document.getElementById('bCapture').textContent='CAPTURE\nRETICLE';
+}
+
+// ─── OFFSCREEN SAMPLE ────────────────────────────────────────
+const osc = document.createElement('canvas');
+const octx = osc.getContext('2d',{willReadFrequently:true});
+const SW=320, SH=180;
+osc.width=SW; osc.height=SH;
+
+// ─── GRAYSCALE ───────────────────────────────────────────────
+function toGray(d){
+  const len=d.length/4, g=new Float32Array(len);
+  for(let i=0;i<len;i++){const o=i*4;g[i]=(d[o]*0.299+d[o+1]*0.587+d[o+2]*0.114);}
+  return g;
+}
+
+// ─── MOTION DETECT ───────────────────────────────────────────
+function detectMotion(gray,w,h){
+  const prev=S.prevGray; S.prevGray=gray;
+  if(!prev) return [];
+  const pts=[], thr=S.threshold, step=3;
+  // simple connected-component approximation via grid
+  for(let y=step;y<h-step;y+=step)
+    for(let x=step;x<w-step;x+=step){
+      const diff=Math.abs(gray[y*w+x]-prev[y*w+x]);
+      if(diff>thr){
+        const area=Math.round(diff/5);
+        if(area>=S.minArea) pts.push({x,y,area});
+      }
+    }
+  if(pts.length>S.maxPts){pts.sort((a,b)=>b.area-a.area);pts.length=S.maxPts;}
+  return pts;
+}
+
+// ─── KALMAN ──────────────────────────────────────────────────
+function kReset(x,y){S.kx=x;S.ky=y;S.kvx=0;S.kvy=0;S.kReady=true;}
+function kPredict(){
+  S.kx+=S.kvx*0.9; S.ky+=S.kvy*0.9;
+  return {x:S.kx,y:S.ky};
+}
+function kCorrect(mx,my){
+  const alpha=0.3;
+  S.kvx=S.kvx*0.7+(mx-S.kx)*0.4;
+  S.kvy=S.kvy*0.7+(my-S.ky)*0.4;
+  S.kx=S.kx*(1-alpha)+mx*alpha;
+  S.ky=S.ky*(1-alpha)+my*alpha;
+  S.velX=S.kvx; S.velY=S.kvy;
+  return {x:S.kx,y:S.ky};
+}
+
+// ─── SIMULATED OPTICAL FLOW ──────────────────────────────────
+// In browser we simulate flow by tracking motion cluster near lock target
+function updateFlow(pts){
+  if(!S.flowOn||!S.locked||!S.lockT) return null;
+  const t=S.lockT, r=S.flowRadius;
+  const nearby=pts.filter(p=>Math.hypot(p.x-t.x,p.y-t.y)<r*2);
+  if(nearby.length===0) return null;
+  const mx=nearby.reduce((s,p)=>s+p.x,0)/nearby.length;
+  const my=nearby.reduce((s,p)=>s+p.y,0)/nearby.length;
+  const fc=Math.min(1,nearby.length/8);
+  return {x:mx,y:my,conf:0.55+0.35*fc};
+}
+
+// ─── PROCESS LOCK ────────────────────────────────────────────
+function processLock(pts,W,H){
+  const now=Date.now()/1000;
+  const cx=W/2,cy=H/2;
+
+  if(S.capRequested){
+    const cands=[];
+    for(const p of pts){
+      const d=Math.hypot(p.x-cx,p.y-cy);
+      if(d<=S.capRadius){
+        const score=(S.capRadius-d)*2+Math.min(80,p.area);
+        cands.push({score,p});
+      }
+    }
+    if(cands.length){
+      cands.sort((a,b)=>b.score-a.score);
+      const best=cands[0].p;
+      S.locked=true; S.lockT={...best};
+      S.capRequested=false; S.capArmed=false;
+      S.lockSeen=now; S.trackConf=1.0;
+      kReset(best.x,best.y);
+      S.lockStatus=`LOCKED FROM RETICLE X${best.x} Y${best.y} A${best.area}`;
+      // simulate snap tag after capture
+      S.snapLabel='SNAP PENDING'; S.snapConf=0; S.snapDone=false;
+      setTimeout(()=>{
+        if(S.locked){
+          const tags=['UAV','BIRD','AIRCRAFT','DRONE','OBJECT','VEHICLE','PERSON'];
+          S.snapLabel=tags[Math.floor(Math.random()*tags.length)];
+          S.snapConf=0.42+Math.random()*0.55;
+          S.snapDone=true;
+        }
+      },900+Math.random()*600);
+      document.getElementById('bCapture').textContent='CAPTURE\nRETICLE';
+    } else {
+      S.lockStatus='CAPTURE ARMED: NO MOTION IN RETICLE';
+    }
+  }
+
+  if(!S.locked||!S.lockT) return;
+
+  const pred=kPredict();
+  let measurement=null, conf=0, src='PREDICT';
+
+  // flow
+  const flow=updateFlow(pts);
+  if(flow&&Math.hypot(flow.x-pred.x,flow.y-pred.y)<=S.lockRadius*1.7){
+    measurement={x:flow.x,y:flow.y};
+    conf=Math.max(conf,flow.conf);
+    src='FLOW';
+  }
+
+  // motion reacquire
+  const cands=[];
+  for(const p of pts){
+    const dp=Math.hypot(p.x-pred.x,p.y-pred.y);
+    const dl=Math.hypot(p.x-S.lockT.x,p.y-S.lockT.y);
+    if(Math.min(dp,dl)<=S.lockRadius){
+      const score=(S.lockRadius-Math.min(dp,dl))*2.3+Math.min(60,p.area);
+      cands.push({score,p});
+    }
+  }
+  if(cands.length){
+    cands.sort((a,b)=>b.score-a.score);
+    const best=cands[0].p;
+    if(measurement){
+      measurement={x:measurement.x*0.55+best.x*0.45,y:measurement.y*0.55+best.y*0.45};
+      conf=Math.max(conf,0.88); src='FLOW+MOTION';
+    } else {
+      measurement={x:best.x,y:best.y};
+      conf=Math.max(conf,0.74); src='MOTION';
+    }
+  }
+
+  if(measurement){
+    const r=kCorrect(measurement.x,measurement.y);
+    S.lockT={x:Math.round(r.x),y:Math.round(r.y),area:S.lockT.area};
+    S.lockSeen=now;
+    S.trackConf=Math.min(1,S.trackConf*0.82+conf*0.28);
+    S.lockStatus=`ADV LOCK ${src} X${S.lockT.x} Y${S.lockT.y} CONF ${S.trackConf.toFixed(2)}`;
+  } else {
+    const age=now-S.lockSeen;
+    S.trackConf=Math.max(0,S.trackConf*0.92-0.025);
+    S.lockT={x:Math.round(pred.x),y:Math.round(pred.y),area:S.lockT.area};
+    S.lockStatus=`TARGET MEMORY / SEARCHING ${age.toFixed(1)}s CONF ${S.trackConf.toFixed(2)}`;
+    if(age>S.lostAfter&&S.trackConf<0.20){
+      S.locked=false; S.lockT=null; S.kReady=false;
+      S.lockStatus='TARGET LOST - RETICLE READY';
+      S.snapLabel='UNSCANNED'; S.snapConf=0;
+    }
+  }
+}
+
+// ─── RENDER MODES ────────────────────────────────────────────
+function applyMode(imageData){
+  const d=imageData.data,len=d.length;
+  if(S.mode==='THERMAL'){
+    // turbo colormap approximation
+    for(let i=0;i<len;i+=4){
+      const v=(d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114)/255;
+      const t=v*3;
+      if(t<1){d[i]=Math.round(t*80);d[i+1]=Math.round(t*200);d[i+2]=Math.round(255-t*100);}
+      else if(t<2){const u=t-1;d[i]=Math.round(80+u*175);d[i+1]=Math.round(200-u*50);d[i+2]=Math.round(155-u*155);}
+      else{const u=t-2;d[i]=Math.round(255-u*50);d[i+1]=Math.round(150-u*150);d[i+2]=0;}
+    }
+  } else if(S.mode==='EDGE'){
+    // simple edge detect
+    const gray=new Uint8Array(len/4);
+    for(let i=0;i<len/4;i++)gray[i]=(d[i*4]*77+d[i*4+1]*150+d[i*4+2]*29)>>8;
+    const W2=imageData.width,H2=imageData.height;
+    for(let y=1;y<H2-1;y++)for(let x=1;x<W2-1;x++){
+      const i=y*W2+x;
+      const gx=gray[i+1]-gray[i-1]+gray[i+W2+1]-gray[i+W2-1];
+      const gy=gray[i+W2]-gray[i-W2]+gray[i+W2+1]-gray[i-W2+1];
+      const e=Math.min(255,Math.abs(gx)+Math.abs(gy));
+      const o=i*4;
+      d[o]=e>>4; d[o+1]=e; d[o+2]=e>>4; d[o+3]=255;
+    }
+  } else if(S.mode==='DITHER'){
+    const bayer=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+    const W2=imageData.width,H2=imageData.height;
+    for(let y=0;y<H2;y++)for(let x=0;x<W2;x++){
+      const i=(y*W2+x)*4;
+      const gray=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
+      const thresh=bayer[y%4][x%4]*16;
+      const v=gray>thresh?255:0;
+      d[i]=0;d[i+1]=v;d[i+2]=v>>4;d[i+3]=255;
+    }
+  }
+  return imageData;
+}
+
+// ─── DRAW ────────────────────────────────────────────────────
+function draw(rawPts){
+  const W=canvas.width,H=canvas.height;
+  const c=col();
+  const now=Date.now()/1000;
+
+  // draw video base with mode
+  if(video.readyState>=2){
+    // draw video to offscreen at full res for mode processing
+    const msc=document.createElement('canvas');
+    msc.width=W; msc.height=H;
+    const mctx=msc.getContext('2d');
+    if(S.mirror){mctx.scale(-1,1);mctx.drawImage(video,-W,0,W,H);mctx.setTransform(1,0,0,1,0,0);}
+    else mctx.drawImage(video,0,0,W,H);
+
+    if(S.mode!=='NORMAL'){
+      // apply mode on a smaller version for performance
+      const sc=document.createElement('canvas');
+      sc.width=Math.round(W/2);sc.height=Math.round(H/2);
+      const sctx=sc.getContext('2d');
+      sctx.drawImage(msc,0,0,sc.width,sc.height);
+      let id=sctx.getImageData(0,0,sc.width,sc.height);
+      id=applyMode(id);
+      sctx.putImageData(id,0,0);
+      ctx.drawImage(sc,0,0,W,H);
+    } else {
+      ctx.drawImage(msc,0,0,W,H);
+    }
+  } else {
+    ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  }
+
+  // scale pts from sample space
+  const sx=W/SW, sy=H/SH;
+  const pts=rawPts.map(p=>({x:Math.round(p.x*sx),y:Math.round(p.y*sy),area:p.area}));
+
+  // motion history
+  const fh=[];
+  for(const m of S.motionHist){
+    const age=now-m.ts;
+    if(age<S.motionDecay){
+      fh.push(m);
+      const fade=Math.max(0.15,1-age/S.motionDecay);
+      ctx.beginPath();ctx.arc(m.x,m.y,m.area<=3?1:2,0,Math.PI*2);
+      ctx.fillStyle=rgba(c,fade);ctx.fill();
+    }
+  }
+  S.motionHist.length=0;for(const m of fh)S.motionHist.push(m);
+
+  // live pts
+  for(const p of pts){
+    S.motionHist.push({x:p.x,y:p.y,area:p.area,ts:now});
+    ctx.beginPath();ctx.arc(p.x,p.y,p.area<=3?2:3,0,Math.PI*2);
+    ctx.fillStyle=rgbS(c);ctx.fill();
+    if(S.radarOn) S.radarBlips.push({nx:(p.x/W)*2-1,ny:(p.y/H)*2-1,area:p.area,ts:now});
+  }
+
+  // lock box
+  if(S.locked&&S.lockT){
+    const t=S.lockT;
+    const lc=S.trackConf>=0.35?{r:40,g:220,b:255}:{r:255,g:180,b:40};
+    const pad=S.lockT.area<=3?14:10;
+    ctx.strokeStyle=rgba(lc,0.9);ctx.lineWidth=2;
+    ctx.strokeRect(t.x-pad,t.y-pad,pad*2,pad*2);
+    ctx.lineWidth=1.5;ctx.strokeStyle=rgba(lc,0.88);
+    ctx.beginPath();
+    ctx.moveTo(t.x-20,t.y);ctx.lineTo(t.x-5,t.y);
+    ctx.moveTo(t.x+5,t.y);ctx.lineTo(t.x+20,t.y);
+    ctx.moveTo(t.x,t.y-20);ctx.lineTo(t.x,t.y-5);
+    ctx.moveTo(t.x,t.y+5);ctx.lineTo(t.x,t.y+20);
+    ctx.stroke();
+    ctx.beginPath();ctx.arc(t.x,t.y,12,0,Math.PI*2);
+    ctx.strokeStyle=rgba(lc,0.7);ctx.lineWidth=1;ctx.stroke();
+    // velocity
+    const pvx=t.x+S.velX*5,pvy=t.y+S.velY*5;
+    ctx.beginPath();ctx.moveTo(t.x,t.y);ctx.lineTo(pvx,pvy);
+    ctx.strokeStyle='rgba(255,180,40,0.7)';ctx.lineWidth=1.5;ctx.stroke();
+    ctx.beginPath();ctx.arc(pvx,pvy,4,0,Math.PI*2);
+    ctx.fillStyle='rgba(255,180,40,0.7)';ctx.fill();
+    // label
+    const tag=S.snapConf>0?`${S.snapLabel} ${S.snapConf.toFixed(2)}`:S.snapLabel;
+    const lbl=`ADV LOCK ${S.trackConf.toFixed(2)} // ${tag}`;
+    const lx=Math.min(W-200,t.x+8),ly=Math.max(14,t.y-10);
+    ctx.font='10px monospace';
+    ctx.fillStyle='#000';ctx.fillText(lbl,lx+1,ly+1);
+    ctx.fillStyle=rgba(lc,1);ctx.fillText(lbl,lx,ly);
+
+    // snap box simulation (drawn as amber rect near lock)
+    if(S.snapDone&&S.snapConf>0){
+      const sp=30;
+      ctx.strokeStyle='rgba(255,180,40,0.7)';ctx.lineWidth=1;
+      ctx.strokeRect(t.x-sp,t.y-sp,sp*2,sp*2);
+      const stxt=`SNAP TAG: ${S.snapLabel} ${S.snapConf.toFixed(2)}`;
+      ctx.font='9px monospace';
+      ctx.fillStyle='#000';ctx.fillText(stxt,t.x-sp+1,t.y-sp-5+1);
+      ctx.fillStyle='rgba(255,180,40,0.9)';ctx.fillText(stxt,t.x-sp,t.y-sp-5);
+    }
+  }
+
+  // corner brackets
+  const m=10,arm=55;
+  const bpairs=[
+    [[m,m],[m+arm,m]],[[m,m],[m,m+arm]],
+    [[W-m,m],[W-m-arm,m]],[[W-m,m],[W-m,m+arm]],
+    [[m,H-m],[m+arm,H-m]],[[m,H-m],[m,H-m-arm]],
+    [[W-m,H-m],[W-m-arm,H-m]],[[W-m,H-m],[W-m,H-m-arm]],
+  ];
+  ctx.strokeStyle=rgba(c,0.85);ctx.lineWidth=1;
+  for(const [a,b] of bpairs){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
+
+  // centre reticle
+  const cx=W/2,cy=H/2;
+  const rc=S.capArmed?{r:40,g:220,b:255}:S.locked?{r:40,g:220,b:255}:c;
+  ctx.strokeStyle=rgba(rc,0.9);ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(cx-20,cy);ctx.lineTo(cx-5,cy);
+  ctx.moveTo(cx+5,cy);ctx.lineTo(cx+20,cy);
+  ctx.moveTo(cx,cy-20);ctx.lineTo(cx,cy-5);
+  ctx.moveTo(cx,cy+5);ctx.lineTo(cx,cy+20);
+  ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,22,0,Math.PI*2);
+  ctx.strokeStyle=rgba(rc,0.7);ctx.lineWidth=1;ctx.stroke();
+  ctx.beginPath();ctx.arc(cx,cy,S.capRadius*sx*0.5,0,Math.PI*2);
+  ctx.setLineDash([5,8]);ctx.strokeStyle=rgba(rc,0.25);ctx.lineWidth=1;ctx.stroke();
+  ctx.setLineDash([]);
+
+  // scanlines
+  if(S.scanlineOn){
+    for(let y=0;y<H;y+=8){
+      ctx.fillStyle='rgba(0,35,15,0.42)';
+      ctx.fillRect(0,y,W,1);
+    }
+  }
+
+  // inspector panel
+  if(S.inspectOn) drawInspector(W,H,c,now);
+
+  // radar
+  if(S.radarOn) drawRadar(W,H,c,now);
+
+  // HUD text
+  drawHUD(W,H,c,pts,now);
+}
+
+// ─── INSPECTOR ───────────────────────────────────────────────
+function drawInspector(W,H,c,now){
+  const pw=190,ph=160;
+  const px1=W-pw-12,py1=75;
+  const px2=px1+pw,py2=py1+ph;
+  const lc=S.snapDone?{r:255,g:180,b:40}:S.locked?{r:40,g:220,b:255}:c;
+
+  ctx.fillStyle='rgba(0,14,6,0.75)';
+  ctx.fillRect(px1,py1,pw,ph);
+  ctx.strokeStyle=rgba(lc,0.8);ctx.lineWidth=1;
+  ctx.strokeRect(px1,py1,pw,ph);
+
+  ctx.font='8px monospace';ctx.fillStyle=rgba(lc,0.9);
+  ctx.fillText('ADV LOCK VIEWER',px1+6,py1+14);
+
+  if(!S.locked||!S.lockT){
+    ctx.font='11px monospace';ctx.fillStyle=rgba(lc,0.7);
+    ctx.fillText('AIM + CAPTURE',px1+22,py1+70);
+    return;
+  }
+
+  // zoomed crop of lock area (drawn from video)
+  if(video.readyState>=2){
+    const t=S.lockT;
+    const vw=video.videoWidth||W, vh=video.videoHeight||H;
+    const half=20;
+    const sfx=vw/W,sfy=vh/H;
+    const vx=t.x*sfx,vy=t.y*sfy;
+    const vx1=Math.max(0,vx-half*sfx),vy1=Math.max(0,vy-half*sfy);
+    const vw2=half*2*sfx,vh2=half*2*sfy;
+    const viewW=pw-16,viewH=ph-68;
+    ctx.save();
+    ctx.beginPath();ctx.rect(px1+8,py1+20,viewW,viewH);ctx.clip();
+    try{
+      ctx.drawImage(video,vx1,vy1,vw2,vh2,px1+8,py1+20,viewW,viewH);
+    }catch(e){}
+    ctx.restore();
+    ctx.strokeStyle=rgba(lc,0.6);ctx.lineWidth=1;
+    ctx.strokeRect(px1+8,py1+20,viewW,viewH);
+    // crosshair in inspector
+    const icx=px1+8+viewW/2,icy=py1+20+viewH/2;
+    ctx.strokeStyle=rgba(lc,0.8);ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(icx-16,icy);ctx.lineTo(icx-5,icy);
+    ctx.moveTo(icx+5,icy);ctx.lineTo(icx+16,icy);
+    ctx.moveTo(icx,icy-16);ctx.lineTo(icx,icy-5);
+    ctx.moveTo(icx,icy+5);ctx.lineTo(icx,icy+16);
+    ctx.stroke();
+    ctx.beginPath();ctx.arc(icx,icy,8,0,Math.PI*2);
+    ctx.strokeStyle=rgba(lc,0.55);ctx.lineWidth=1;ctx.stroke();
+  }
+
+  const tag=S.snapConf>0?`${S.snapLabel} ${S.snapConf.toFixed(2)}`:S.snapLabel;
+  ctx.font='7.5px monospace';
+  const footers=[
+    `X${S.lockT.x} Y${S.lockT.y} CONF ${S.trackConf.toFixed(2)}`,
+    `TAG: ${tag}`,
+    S.snapDone?`SNAP: TAGGED`:'SNAP: PENDING',
+  ];
+  footers.forEach((t2,i)=>{
+    const yy=py2-36+i*14;
+    ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillText(t2,px1+7+1,yy+1);
+    ctx.fillStyle=i>=1?'rgba(255,180,40,0.9)':rgba(lc,0.9);
+    ctx.fillText(t2,px1+7,yy);
+  });
+}
+
+// ─── RADAR ───────────────────────────────────────────────────
+function drawRadar(W,H,c,now){
+  const r=58,margin=14;
+  const rcx=W-r-margin, rcy=H-r-margin-16;
+  ctx.save();ctx.globalAlpha=0.85;
+  ctx.beginPath();ctx.arc(rcx,rcy,r+6,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,16,7,1)';ctx.fill();ctx.restore();
+  [1,0.66,0.33].forEach((f,i)=>{
+    ctx.beginPath();ctx.arc(rcx,rcy,r*f,0,Math.PI*2);
+    ctx.strokeStyle=rgba(c,i===0?0.6:0.22);ctx.lineWidth=1;ctx.stroke();
+  });
+  ctx.strokeStyle=rgba(c,0.2);ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(rcx-r,rcy);ctx.lineTo(rcx+r,rcy);
+  ctx.moveTo(rcx,rcy-r);ctx.lineTo(rcx,rcy+r);ctx.stroke();
+  S.radarAng=(S.radarAng+4)%360;
+  const ang=S.radarAng*Math.PI/180;
+  ctx.strokeStyle=rgba(c,0.9);ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(rcx,rcy);
+  ctx.lineTo(rcx+Math.cos(ang)*r,rcy+Math.sin(ang)*r);ctx.stroke();
+  for(let i=1;i<14;i++){
+    const ta=(S.radarAng-i*2.5)*Math.PI/180;
+    ctx.strokeStyle=rgba(c,Math.max(0,0.06-i*0.004));ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(rcx,rcy);
+    ctx.lineTo(rcx+Math.cos(ta)*r,rcy+Math.sin(ta)*r);ctx.stroke();
+  }
+  const fb=[];
+  for(const b of S.radarBlips){
+    const age=now-b.ts;
+    if(age<2.4){
+      fb.push(b);
+      const fade=Math.max(0.18,1-age/2.4);
+      const bx=rcx+b.nx*r*0.92,by=rcy+b.ny*r*0.92;
+      if((bx-rcx)**2+(by-rcy)**2<=r*r){
+        ctx.beginPath();ctx.arc(bx,by,b.area<=8?2:3,0,Math.PI*2);
+        ctx.fillStyle=rgba(c,fade*0.9);ctx.fill();
+      }
+    }
+  }
+  S.radarBlips.length=0;for(const b of fb)S.radarBlips.push(b);
+  ctx.font='8px monospace';ctx.fillStyle=rgba(c,0.7);ctx.textAlign='center';
+  ctx.fillText('RADAR',rcx,rcy-r-8);
+  ctx.fillText(`BLIPS ${fb.length}`,rcx,rcy+r+15);
+  ctx.textAlign='left';
+}
+
+// ─── HUD TEXT ────────────────────────────────────────────────
+function drawHUD(W,H,c,pts,now){
+  S.fpsF++;
+  if(now-S.fpsClock>=1){
+    S.fps=S.fpsF/(now-S.fpsClock);S.fpsF=0;S.fpsClock=now;
+  }
+  const tgt=S.lockT?`X${S.lockT.x} Y${S.lockT.y} A${S.lockT.area}`:'NONE';
+  const snap=S.snapConf>0?`${S.snapLabel} ${S.snapConf.toFixed(2)}`:S.snapLabel;
+  const lines=[
+    'MINOS SIGINT // ADVANCED TARGET LOCK',
+    `THRESH:${S.threshold} MINAREA:${S.minArea}px PTS:${pts.length} FPS:${S.fps.toFixed(1)}`,
+    `ZOOM:${S.zoom.toFixed(1)}x LOCK:${tgt} CONF:${S.trackConf.toFixed(2)}`,
+    S.lockStatus,
+    `SNAP TAG: ${snap} | MODE:${S.mode}`,
+    `RETICLE CAPTURE -> KALMAN + FLOW + MOTION MEMORY TRACK`,
+  ];
+  ctx.font='11px monospace';
+  lines.forEach((line,i)=>{
+    const y=20+i*17;
+    ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillText(line,15,y+1);
+    ctx.fillStyle=rgba(c,0.9);ctx.fillText(line,14,y);
+  });
+  // bottom bar
+  ctx.font='10px monospace';
+  const bot=S.lockStatus;
+  ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillText(bot,15,H-18+1);
+  ctx.fillStyle=S.locked?'rgba(40,220,255,0.9)':S.capArmed?'rgba(40,220,255,0.9)':rgba(c,0.8);
+  ctx.fillText(bot,14,H-18);
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────
+function loop(){
+  if(!S.running)return;
+  requestAnimationFrame(loop);
+  if(video.readyState<2)return;
+
+  // apply zoom
+  if(S.zoom>1.01){
+    const vw=video.videoWidth||SW,vh=video.videoHeight||SH;
+    const cw=Math.round(SW/S.zoom),ch=Math.round(SH/S.zoom);
+    const ox=Math.round((SW-cw)/2),oy=Math.round((SH-ch)/2);
+    // sample from center crop of video
+    octx.drawImage(video,0,0,SW,SH);
+    // re-draw zoomed crop
+    octx.drawImage(video,
+      Math.round(vw/2-vw/(2*S.zoom)),Math.round(vh/2-vh/(2*S.zoom)),
+      Math.round(vw/S.zoom),Math.round(vh/S.zoom),
+      0,0,SW,SH);
+  } else {
+    if(S.mirror){octx.save();octx.scale(-1,1);octx.drawImage(video,-SW,0,SW,SH);octx.restore();}
+    else octx.drawImage(video,0,0,SW,SH);
+  }
+
+  let id; try{id=octx.getImageData(0,0,SW,SH);}catch(e){return;}
+  const gray=toGray(id.data);
+  let rawPts=[];
+  if(S.ufoOn){
+    rawPts=detectMotion(gray,SW,SH);
+    const W=canvas.width,H=canvas.height;
+    const sx=W/SW,sy=H/SH;
+    const scaledPts=rawPts.map(p=>({x:Math.round(p.x*sx),y:Math.round(p.y*sy),area:p.area}));
+    processLock(scaledPts,W,H);
+  } else {
+    S.prevGray=null;
+  }
+  draw(rawPts);
+}
+
+resize();
+</script>
+
+</body>
+</html>
