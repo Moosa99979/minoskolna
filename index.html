@@ -416,9 +416,13 @@ function updateStatic(gray,w,h,W,H){
 
 // kalman update for track
 function kUpdate(t,mx,my){
-  const a=0.3;
-  t.kvx=t.kvx*0.72+(mx-t.kx)*0.38;
-  t.kvy=t.kvy*0.72+(my-t.ky)*0.38;
+  // adaptive gain: fast-moving targets need the filter to trust the new
+  // measurement more (less smoothing lag), slow targets stay smooth/stable
+  const curSpd=Math.hypot(t.kvx,t.kvy);
+  const a=curSpd>3?0.55:0.3;
+  const vGain=curSpd>3?0.55:0.38;
+  t.kvx=t.kvx*(1-vGain)+(mx-t.kx)*vGain;
+  t.kvy=t.kvy*(1-vGain)+(my-t.ky)*vGain;
   t.kx=t.kx*(1-a)+mx*a;
   t.ky=t.ky*(1-a)+my*a;
   t.vx=t.kvx;t.vy=t.kvy;
@@ -426,28 +430,71 @@ function kUpdate(t,mx,my){
   t.x=Math.round(t.kx);t.y=Math.round(t.ky);
 }
 
+
 function updateTracks(mClusters,sClusters){
   const all=[...mClusters.map(c=>({...c,src:'M'})),...sClusters.map(c=>({...c,src:'S'}))];
   for(const tid in S.tracks){
     const t=S.tracks[tid];
     t.age++;
-    // kalman predict
-    t.kx+=t.kvx*0.88;t.ky+=t.kvy*0.88;
-    // find nearest cluster
-    let best=null,bd=Infinity;
+    const spd=Math.hypot(t.kvx,t.kvy);
+    // Kalman predict — fast movers get a stronger forward projection
+    const predGain=spd>3?1.15:0.88;
+    t.kx+=t.kvx*predGain;t.ky+=t.kvy*predGain;
+
+    // velocity-adaptive search radius: scales up with current speed so
+    // fast-moving subjects (large per-frame displacement) aren't lost
+    const speedBonus=Math.min(160,spd*9);
+    const searchR=S.trackRadius+speedBonus;
+
+    // search is an ellipse stretched along the direction of motion —
+    // a fast mover is far more likely to be "ahead" than "to the side"
+    const dirLen=Math.max(1,spd);
+    const dirx=t.kvx/dirLen,diry=t.kvy/dirLen;
+
+    let best=null,bs=-Infinity;
     for(const c of all){
-      const d=Math.min(Math.hypot(c.x-t.kx,c.y-t.ky),Math.hypot(c.x-t.x,c.y-t.y));
-      if(d<S.trackRadius&&d<bd){bd=d;best=c;}
+      const dx=c.x-t.kx,dy=c.y-t.ky;
+      const dist=Math.hypot(dx,dy);
+      if(dist>searchR*1.8)continue; // hard outer cutoff for perf
+      // project onto motion direction vs perpendicular
+      const along=dx*dirx+dy*diry;
+      const perp=Math.hypot(dx-along*dirx,dy-along*diry);
+      // ellipse test: long axis along motion, short axis perpendicular
+      const longAxis=searchR+spd*4;
+      const shortAxis=Math.max(24,S.trackRadius*0.6);
+      const ellipseScore=(along*along)/(longAxis*longAxis)+(perp*perp)/(shortAxis*shortAxis);
+      if(ellipseScore<=1.15){
+        const score=(1-Math.min(1,ellipseScore))*40+Math.min(40,c.n*2);
+        if(score>bs){bs=score;best=c;}
+      }
     }
+    // fallback: plain radius check (handles slow/static objects & first acquisition)
+    if(!best){
+      let bd=Infinity;
+      for(const c of all){
+        const d=Math.min(Math.hypot(c.x-t.kx,c.y-t.ky),Math.hypot(c.x-t.x,c.y-t.y));
+        if(d<S.trackRadius&&d<bd){bd=d;best=c;}
+      }
+    }
+
     if(best){
       kUpdate(t,best.x,best.y);
       t.hits++;t.miss=0;t.src=best.src;
+      // motion trail point for fast-mover streak rendering
+      t.trail=t.trail||[];
+      t.trail.push({x:t.x,y:t.y,ts:Date.now()/1000});
+      if(t.trail.length>14)t.trail.shift();
     } else {
       t.miss++;
       t.x=Math.round(t.kx);t.y=Math.round(t.ky);
-      if(t.miss>45&&Math.hypot(t.vx,t.vy)<0.1){
+      // fast movers that go briefly unseen (motion blur, occlusion) get
+      // more patience before being dropped, since they're likely still
+      // in frame just temporarily undetected between samples
+      const missLimit=spd>3?70:45;
+      const hardLimit=spd>3?130:90;
+      if(t.miss>missLimit&&spd<0.1){
         delete S.tracks[tid];
-      } else if(t.miss>90){
+      } else if(t.miss>hardLimit){
         delete S.tracks[tid];
       }
     }
@@ -457,11 +504,15 @@ function updateTracks(mClusters,sClusters){
     for(const c of all){
       let claimed=false;
       for(const tid in S.tracks){
-        if(Math.hypot(S.tracks[tid].x-c.x,S.tracks[tid].y-c.y)<S.trackRadius){claimed=true;break;}
+        const t=S.tracks[tid];
+        const spd=Math.hypot(t.kvx,t.kvy);
+        const r=S.trackRadius+Math.min(160,spd*9);
+        if(Math.hypot(t.x-c.x,t.y-c.y)<r){claimed=true;break;}
       }
       if(!claimed&&c.n>=3&&Object.keys(S.tracks).length<6){
         getOrCreateTrack(c.x,c.y,c.src);
       }
+
     }
   }
 }
@@ -526,8 +577,10 @@ function draw(gray){
     const lc=t.label?{r:255,g:55,b:55}:{r:0,g:255,b:110}; // red box if YOLO tagged, green otherwise
     const showRed=t.label&&S.yoloOn;
 
-    // bounding box (corner brackets style)
-    const pad=isMotion?22:18;
+    // bounding box (corner brackets style) — widens slightly for fast
+    // movers to account for motion blur / per-frame displacement
+    const trackSpd=Math.hypot(t.vx,t.vy);
+    const pad=(isMotion?22:18)+Math.min(20,trackSpd*2.5);
     const arm=8;
     const corners=[[t.x-pad,t.y-pad],[t.x+pad,t.y-pad],[t.x+pad,t.y+pad],[t.x-pad,t.y+pad]];
     ctx.strokeStyle=showRed?'rgba(255,55,55,0.9)':rgba(c,0.85);
@@ -555,6 +608,17 @@ function draw(gray){
     ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillText(tid,t.x+pad+2+1,t.y+1);
     ctx.fillStyle=rgba(c,0.9);ctx.fillText(tid,t.x+pad+2,t.y);
 
+    // comet trail for fast movers — visually shows recent path,
+    // and helps the eye keep up with quick subjects across frames
+    if(t.trail&&t.trail.length>1&&Math.hypot(t.vx,t.vy)>1){
+      for(let i=1;i<t.trail.length;i++){
+        const p0=t.trail[i-1],p1=t.trail[i];
+        const fade=i/t.trail.length;
+        ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);
+        ctx.strokeStyle=rgba(c,fade*0.45);ctx.lineWidth=1.5;ctx.stroke();
+      }
+    }
+
     // velocity arrow
     const spd=Math.hypot(t.vx,t.vy);
     if(spd>0.2){
@@ -562,6 +626,7 @@ function draw(gray){
       ctx.beginPath();ctx.moveTo(t.x,t.y);ctx.lineTo(pvx,pvy);
       ctx.strokeStyle='rgba(255,180,40,0.55)';ctx.lineWidth=1.2;ctx.stroke();
     }
+
 
     // crosshair centre
     ctx.strokeStyle=rgba(c,0.6);ctx.lineWidth=1;ctx.beginPath();
